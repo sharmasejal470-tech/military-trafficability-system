@@ -342,6 +342,15 @@ def run_app() -> None:
             current_factor=current_factor,
             deploy_avlb=deploy_avlb,
         )
+        # Update trafficability to incorporate AVLB bridgehead cells into map surface
+        if convoy_plan.bridge_deployed and convoy_plan.bridge_cells:
+            trafficability = compute_trafficability(
+                terrain,
+                base_vehicle,
+                rainfall_multiplier=rainfall_mult,
+                current_factor=current_factor,
+                bridge_cells=convoy_plan.bridge_cells,
+            )
         spearhead_element = convoy_plan.elements.get("Spearhead")
         path_res = spearhead_element.path_result if spearhead_element else PathResult([], 0.0, PathStatus.NO_PATH, "No Spearhead")
         metrics, profile = compute_route_analytics(
@@ -491,17 +500,21 @@ def run_app() -> None:
             st.info(convoy_plan.message)
 
             convoy_rows = []
-            for name, elem in convoy_plan.elements.items():
-                convoy_rows.append({
-                    "Echelon": name,
-                    "Vehicle Asset": elem.vehicle.name,
-                    "Role": elem.vehicle.role.value,
-                    "Departure Delay (min)": f"+{elem.departure_delay_min:.1f}",
-                    "Transit Duration (min)": f"{elem.transit_duration_min:.1f}",
-                    "Arrival Time (min)": f"+{elem.arrival_time_min:.1f}",
-                    "Waypoints Traversed": len(elem.path_result.path_cells),
-                    "Status": elem.path_result.status.value,
-                })
+            echelon_display_names = ["Recon Screen (Jeep)", "Armored Spearhead (Tank)", "Logistics Column (Truck)"]
+            for name in echelon_display_names:
+                elem = convoy_plan.elements.get(name)
+                if elem is not None:
+                    role_str = getattr(elem.vehicle, "role", "") or elem.vehicle.weight_class
+                    convoy_rows.append({
+                        "Echelon": name,
+                        "Vehicle Asset": elem.vehicle.name,
+                        "Role": role_str,
+                        "Departure Delay (min)": f"+{elem.departure_delay_min:.1f}",
+                        "Transit Duration (min)": f"{elem.transit_duration_min:.1f}",
+                        "Arrival Time (min)": f"+{elem.arrival_time_min:.1f}",
+                        "Waypoints Traversed": len(elem.path_result.path_cells),
+                        "Status": elem.path_result.status.value,
+                    })
             df_convoy = pd.DataFrame(convoy_rows)
             st.dataframe(df_convoy, use_container_width=True)
 

@@ -91,20 +91,20 @@ def compute_trafficability(
 
     # Precipitation runoff and soil liquefaction (Monsoon mud hazards)
     excess_rain = max(0.0, rainfall - 1.0)
-    eff_moisture = np.clip(terrain.moisture + 0.35 * excess_rain, 0.0, 1.0)
+    eff_moisture = np.clip(terrain.moisture + 0.20 * excess_rain, 0.0, 1.0)
 
     if is_heavy:
         red_marsh = terrain.soil_type == SoilType.MARSH_WETLAND
         yellow_marsh = np.zeros((rows, cols), dtype=bool)
-        red_mud = (terrain.soil_type == SoilType.SOFT_CLAY) & (excess_rain > 0.15) & (eff_moisture >= 0.85)
+        red_mud = (terrain.soil_type == SoilType.SOFT_CLAY) & (excess_rain >= 0.35) & (eff_moisture >= 0.92)
     elif is_medium:
-        red_marsh = (terrain.soil_type == SoilType.MARSH_WETLAND) & (excess_rain > 0.25) & (eff_moisture >= 0.88)
+        red_marsh = (terrain.soil_type == SoilType.MARSH_WETLAND) & (excess_rain >= 0.30) & (eff_moisture >= 0.88)
         yellow_marsh = (terrain.soil_type == SoilType.MARSH_WETLAND) & (~red_marsh)
-        red_mud = (terrain.soil_type == SoilType.SOFT_CLAY) & (excess_rain > 0.35) & (eff_moisture >= 0.92)
+        red_mud = (terrain.soil_type == SoilType.SOFT_CLAY) & (excess_rain >= 0.45) & (eff_moisture >= 0.95)
     else:
-        red_marsh = (terrain.soil_type == SoilType.MARSH_WETLAND) & (excess_rain > 0.25) & (eff_moisture >= 0.88)
+        red_marsh = (terrain.soil_type == SoilType.MARSH_WETLAND) & (excess_rain >= 0.30) & (eff_moisture >= 0.88)
         yellow_marsh = (terrain.soil_type == SoilType.MARSH_WETLAND) & (~red_marsh)
-        red_mud = (terrain.soil_type == SoilType.SOFT_CLAY) & (excess_rain > 0.40) & (eff_moisture >= 0.93)
+        red_mud = (terrain.soil_type == SoilType.SOFT_CLAY) & (excess_rain >= 0.45) & (eff_moisture >= 0.95)
 
     red_mask = red_slope | red_water | red_firmness | red_marsh | red_mud
 

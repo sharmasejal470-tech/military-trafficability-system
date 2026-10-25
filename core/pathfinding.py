@@ -311,12 +311,15 @@ def plan_tactical_convoy(
     # 2. Identify Bridgehead location if AVLB is deployed
     bridge_cells: List[Tuple[int, int]] = []
     if deploy_avlb:
-        # Find where the river intersects the direct corridor (near rows 48-52 or mid-latitude)
+        # Cross at row 50, spanning river channel and immediate bank approach ramps
         crossing_r = 50
         river_cols = np.where(terrain.river_mask[crossing_r])[0]
         if len(river_cols) > 0:
-            for c in river_cols:
-                bridge_cells.append((crossing_r, int(c)))
+            min_c = int(np.min(river_cols))
+            max_c = int(np.max(river_cols))
+            for c in range(min_c - 2, max_c + 3):
+                if 0 <= c < terrain.cols:
+                    bridge_cells.append((crossing_r, c))
 
     # 3. Main Armored Spearhead (Tank)
     traff_tank = compute_trafficability(

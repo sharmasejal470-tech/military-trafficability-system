@@ -26,6 +26,7 @@ class VehicleProfile:
     min_firmness: float
     speed_kmph_go: float
     speed_kmph_slowgo: float
+    role: str = ""
 
     def with_overrides(self, **kwargs: Any) -> VehicleProfile:
         """Returns a modified immutable copy of the vehicle profile with user overrides."""
@@ -42,6 +43,7 @@ VEHICLE_PRESETS: Dict[str, VehicleProfile] = {
         min_firmness=0.50,
         speed_kmph_go=60.0,
         speed_kmph_slowgo=25.0,
+        role="Recon Scout",
     ),
     "Medium Tactical 6x6 Truck": VehicleProfile(
         name="Medium Tactical 6x6 Truck",
@@ -51,6 +53,7 @@ VEHICLE_PRESETS: Dict[str, VehicleProfile] = {
         min_firmness=0.60,
         speed_kmph_go=45.0,
         speed_kmph_slowgo=18.0,
+        role="Logistics Transport",
     ),
     "Heavy Tracked Tank": VehicleProfile(
         name="Heavy Tracked Tank",
@@ -60,6 +63,7 @@ VEHICLE_PRESETS: Dict[str, VehicleProfile] = {
         min_firmness=0.75,
         speed_kmph_go=35.0,
         speed_kmph_slowgo=12.0,
+        role="Armored Spearhead",
     ),
     "Combat Engineering AVLB": VehicleProfile(
         name="Combat Engineering AVLB",
@@ -69,6 +73,7 @@ VEHICLE_PRESETS: Dict[str, VehicleProfile] = {
         min_firmness=0.70,
         speed_kmph_go=30.0,
         speed_kmph_slowgo=10.0,
+        role="Combat Engineering",
     ),
 }
 
