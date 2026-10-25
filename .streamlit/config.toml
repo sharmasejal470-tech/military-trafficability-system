@@ -6,7 +6,8 @@ secondaryBackgroundColor = "#1f2937"
 textColor = "#f3f4f6"
 
 [server]
-port = 8501
 enableCORS = false
 enableXsrfProtection = false
-headless = true
+
+[browser]
+gatherUsageStats = false
