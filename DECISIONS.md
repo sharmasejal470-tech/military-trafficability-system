@@ -14,3 +14,7 @@
 | Octile distance metric used for 8-neighbor A* pathfinding | Admissible and consistent metric for 8-connected grid movement with diagonal cost sqrt(2). |
 | Trafficability overlay rendered as direct PNG buffer from NumPy RGBA array | Eliminates vector polygon DOM bloat in Folium/Leaflet and ensures instant rendering of 10,000 cells. |
 | AUV sonar CSV ingestion implemented via `scipy.spatial.cKDTree` nearest-neighbor interpolation | Eliminates C-extension GIS dependencies (GDAL/rasterio) while enabling real-world hydrographic field surveys to override synthetic baselines. |
+| Pure-pip satellite DEM raster ingestion (TIFF/GeoTIFF/CSV) via PIL and scipy zoom | Enables real-world SRTM and Copernicus satellite elevation models without GDAL or rasterio. |
+| 2D Hydrodynamic flow velocity vector field ($u, v, |v|$) modeled across river channel | Accounts for spatial flow variation (fast central thalweg vs slow banks) and local stagnation pressure drag on fording limits. |
+| Multi-vehicle echelon convoy planning with AVLB combat engineering bridging | Coordinates Recon Jeep scout -> Spearhead MBT -> Logistics Truck with tactical bridgehead deployment across water obstacles. |
+| Automatic port detector and 1-click `run.bat` / `run.ps1` launchers | Resolves Windows port 8501 conflicts and auto-launches local browser for seamless execution. |

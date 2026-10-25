@@ -33,6 +33,8 @@ from core.trafficability import TrafficabilityResult, compute_trafficability
 from core.pathfinding import (
     PathResult,
     PathStatus,
+    ConvoyPlan,
+    plan_tactical_convoy,
     find_path,
     nearest_valid_cell,
 )
@@ -42,7 +44,7 @@ from core.analytics import (
     CrossingSafetyStatus,
     compute_route_analytics,
 )
-from core.io_adapters import load_auv_csv
+from core.io_adapters import load_auv_csv, load_dem_raster
 from core.viz import (
     build_trafficability_folium_map,
     build_profile_chart,
@@ -64,9 +66,11 @@ def get_cached_terrain(
     seed: int,
     base_lat: float,
     base_lon: float,
-    file_bytes: Optional[bytes] = None,
+    dem_file_bytes: Optional[bytes] = None,
+    dem_file_name: Optional[str] = None,
+    auv_file_bytes: Optional[bytes] = None,
 ) -> TerrainGrid:
-    """Generates or loads cached TerrainGrid based on parameters and survey input."""
+    """Generates or loads cached TerrainGrid based on parameters and satellite/AUV sensor input."""
     terrain = generate_terrain(
         rows=DEFAULT_GRID_ROWS,
         cols=DEFAULT_GRID_COLS,
@@ -75,10 +79,16 @@ def get_cached_terrain(
         base_lon=base_lon,
         seed=seed,
     )
-    if file_bytes is not None and len(file_bytes) > 0:
-        success, msg, updated = load_auv_csv(io.BytesIO(file_bytes), terrain)
+    if dem_file_bytes is not None and len(dem_file_bytes) > 0:
+        success, msg, updated = load_dem_raster(
+            io.BytesIO(dem_file_bytes), terrain, filename=dem_file_name
+        )
         if success and updated is not None:
-            return updated
+            terrain = updated
+    if auv_file_bytes is not None and len(auv_file_bytes) > 0:
+        success, msg, updated = load_auv_csv(io.BytesIO(auv_file_bytes), terrain)
+        if success and updated is not None:
+            terrain = updated
     return terrain
 
 
@@ -158,38 +168,67 @@ def run_app() -> None:
     # --- Sidebar Controls ---
     st.sidebar.header("🎯 Mission Parameters")
 
-    vehicle_preset_name = st.sidebar.selectbox(
-        "Select Vehicle Platform",
-        options=list(VEHICLE_PRESETS.keys()),
-        index=list(VEHICLE_PRESETS.keys()).index(DEFAULT_VEHICLE_NAME),
-        help="Selects NATO standardized military vehicle mobility and fording envelope.",
+    mission_mode = st.sidebar.radio(
+        "Operational Command Mode",
+        options=["Single Vehicle Asset", "Tactical Echelon Convoy (Joint Arms)"],
+        index=0,
+        help="Switch between single vehicle reconnaissance and multi-echelon military convoy logistics with tactical bridgehead deployment.",
     )
-    base_vehicle = VEHICLE_PRESETS[vehicle_preset_name]
+    is_convoy_mode = (mission_mode == "Tactical Echelon Convoy (Joint Arms)")
 
-    with st.sidebar.expander("⚙️ Vehicle Specification Overrides", expanded=False):
-        custom_slope = st.slider(
-            "Max Slope Limit (deg)",
-            10.0, 45.0, float(base_vehicle.max_slope_deg), 1.0,
-            help="Maximum traversable terrain gradient before track/wheel slippage or rollover."
+    if is_convoy_mode:
+        st.sidebar.info(
+            "🎖️ **Convoy Echelons Active**:\n"
+            "• 🚙 **Recon**: Light 4x4 Jeep (Scout / Trailblazer)\n"
+            "• 🛡️ **Spearhead**: Heavy Tracked MBT (Main Armor)\n"
+            "• 🚚 **Logistics**: Medium Tactical 6x6 Truck (Supplies)"
         )
-        custom_fording = st.slider(
-            "Max Fording Depth (m)",
-            0.2, 2.5, float(base_vehicle.max_fording_m), 0.05,
-            help="Static water wading depth limit before air intake hydrolock."
+        deploy_avlb = st.sidebar.checkbox(
+            "Deploy Combat Engineering Asset (AVLB Bridge)",
+            value=True,
+            help="Deploys an Armored Vehicle-Launched Bridge across impassable river gaps so logistics trucks can follow.",
         )
-        custom_firmness = st.slider(
-            "Min Substrate Firmness",
-            0.1, 0.95, float(base_vehicle.min_firmness), 0.05,
-            help="Minimum substrate bearing strength required to prevent sinkage and belly hang-up."
+        vehicle_preset_name = "Heavy Tracked Tank"
+        base_vehicle = VEHICLE_PRESETS[vehicle_preset_name]
+        custom_slope = float(base_vehicle.max_slope_deg)
+        custom_fording = float(base_vehicle.max_fording_m)
+        custom_firmness = float(base_vehicle.min_firmness)
+        custom_speed_go = float(base_vehicle.speed_kmph_go)
+        custom_speed_slowgo = float(base_vehicle.speed_kmph_slowgo)
+    else:
+        deploy_avlb = False
+        vehicle_preset_name = st.sidebar.selectbox(
+            "Select Vehicle Platform",
+            options=list(VEHICLE_PRESETS.keys()),
+            index=list(VEHICLE_PRESETS.keys()).index(DEFAULT_VEHICLE_NAME),
+            help="Selects NATO standardized military vehicle mobility and fording envelope.",
         )
-        custom_speed_go = st.slider(
-            "Go Dash Speed (km/h)",
-            10.0, 100.0, float(base_vehicle.speed_kmph_go), 5.0
-        )
-        custom_speed_slowgo = st.slider(
-            "Slow-Go Tactical Speed (km/h)",
-            5.0, 50.0, float(base_vehicle.speed_kmph_slowgo), 1.0
-        )
+        base_vehicle = VEHICLE_PRESETS[vehicle_preset_name]
+
+        with st.sidebar.expander("⚙️ Vehicle Specification Overrides", expanded=False):
+            custom_slope = st.slider(
+                "Max Slope Limit (deg)",
+                10.0, 45.0, float(base_vehicle.max_slope_deg), 1.0,
+                help="Maximum traversable terrain gradient before track/wheel slippage or rollover."
+            )
+            custom_fording = st.slider(
+                "Max Fording Depth (m)",
+                0.2, 2.5, float(base_vehicle.max_fording_m), 0.05,
+                help="Static water wading depth limit before air intake hydrolock."
+            )
+            custom_firmness = st.slider(
+                "Min Substrate Firmness",
+                0.1, 0.95, float(base_vehicle.min_firmness), 0.05,
+                help="Minimum substrate bearing strength required to prevent sinkage and belly hang-up."
+            )
+            custom_speed_go = st.slider(
+                "Go Dash Speed (km/h)",
+                10.0, 100.0, float(base_vehicle.speed_kmph_go), 5.0
+            )
+            custom_speed_slowgo = st.slider(
+                "Slow-Go Tactical Speed (km/h)",
+                5.0, 50.0, float(base_vehicle.speed_kmph_slowgo), 1.0
+            )
 
     st.sidebar.markdown("---")
     st.sidebar.subheader("🌧️ Environmental & Hydrographic Conditions")
@@ -212,20 +251,30 @@ def run_app() -> None:
     base_lon = st.sidebar.number_input("Base Longitude (WGS84)", value=DEFAULT_BASE_LON, format="%.4f")
 
     st.sidebar.markdown("---")
-    st.sidebar.subheader("📡 AUV Sonar Survey Ingestion")
+    st.sidebar.subheader("📡 Satellite & AUV Sensor Ingestion")
+    dem_file = st.sidebar.file_uploader(
+        "Upload Satellite DEM GeoTIFF/TIFF/CSV (Optional)",
+        type=["tif", "tiff", "csv"],
+        help="Upload real Copernicus/SRTM DEM raster or elevation matrix (pure-pip ingestion).",
+    )
     auv_file = st.sidebar.file_uploader(
         "Upload AUV Bathymetry CSV (Optional)",
         type=["csv"],
         help="Upload field AUV sonar data with lat, lon, water_depth_m, firmness columns.",
     )
-    file_bytes = auv_file.getvalue() if auv_file is not None else None
+
+    dem_bytes = dem_file.getvalue() if dem_file is not None else None
+    dem_name = dem_file.name if dem_file is not None else None
+    auv_bytes = auv_file.getvalue() if auv_file is not None else None
 
     # Load terrain and trafficability
     terrain = get_cached_terrain(
         seed=int(seed_input),
         base_lat=float(base_lat),
         base_lon=float(base_lon),
-        file_bytes=file_bytes,
+        dem_file_bytes=dem_bytes,
+        dem_file_name=dem_name,
+        auv_file_bytes=auv_bytes,
     )
 
     trafficability = get_cached_trafficability(
@@ -275,40 +324,76 @@ def run_app() -> None:
     goal_col = int(st.session_state["goal_x"])
 
     # --- Compute Tactical Path & Analytics ---
-    path_res = find_path(
-        trafficability.grid,
-        start=(start_row, start_col),
-        goal=(goal_row, goal_col),
-        is_xy=False,
-        cell_size_m=terrain.cell_size_m,
-    )
-
-    metrics, profile = compute_route_analytics(
-        terrain,
-        trafficability,
-        path_res,
-        is_xy=False,
-        cell_size_m=terrain.cell_size_m,
-    )
+    if is_convoy_mode:
+        convoy_plan = plan_tactical_convoy(
+            terrain=terrain,
+            start=(start_row, start_col),
+            goal=(goal_row, goal_col),
+            is_xy=False,
+            rainfall_multiplier=rainfall_mult,
+            current_factor=current_factor,
+            deploy_avlb=deploy_avlb,
+        )
+        spearhead_element = convoy_plan.elements.get("Spearhead")
+        path_res = spearhead_element.path_result if spearhead_element else PathResult([], 0.0, PathStatus.NO_PATH, "No Spearhead")
+        metrics, profile = compute_route_analytics(
+            terrain,
+            trafficability,
+            path_res,
+            is_xy=False,
+            cell_size_m=terrain.cell_size_m,
+        )
+    else:
+        convoy_plan = None
+        path_res = find_path(
+            trafficability.grid,
+            start=(start_row, start_col),
+            goal=(goal_row, goal_col),
+            is_xy=False,
+            cell_size_m=terrain.cell_size_m,
+        )
+        metrics, profile = compute_route_analytics(
+            terrain,
+            trafficability,
+            path_res,
+            is_xy=False,
+            cell_size_m=terrain.cell_size_m,
+        )
 
     # --- Main Content: Top Metric Cards ---
     m_col1, m_col2, m_col3, m_col4, m_col5 = st.columns(5)
 
-    if metrics is not None:
-        m_col1.metric("Tactical Distance", f"{metrics.distance_km:.2f} km")
-        m_col2.metric("Transit ETA", f"{metrics.eta_minutes:.1f} min", f"{metrics.eta_hours:.2f} hrs")
-        m_col3.metric("GO Traversal", f"{metrics.pct_go:.1f}%")
-        m_col4.metric("SLOW-GO Traversal", f"{metrics.pct_slowgo:.1f}%")
+    if is_convoy_mode:
+        m_col1.metric("Convoy Mission", convoy_plan.status)
+        m_col2.metric("Total Convoy Span", f"{convoy_plan.total_convoy_span_min:.1f} min")
+        recon_el = convoy_plan.elements.get("Recon")
+        spear_el = convoy_plan.elements.get("Spearhead")
+        logis_el = convoy_plan.elements.get("Logistics")
+        
+        recon_str = f"+{recon_el.arrival_time_min:.1f} min" if (recon_el and recon_el.path_result.status == PathStatus.OK) else "BLOCKED"
+        m_col3.metric("Recon Scout ETA", recon_str)
 
-        # Color-coded crossing status
-        cross_val = metrics.crossing_status.value
-        m_col5.metric("Crossing Safety", cross_val, delta=metrics.crossing_reason[:24] + "...")
+        spear_str = f"+{spear_el.arrival_time_min:.1f} min" if (spear_el and spear_el.path_result.status == PathStatus.OK) else "BLOCKED"
+        m_col4.metric("Spearhead MBT ETA", spear_str)
+
+        bridge_badge = "AVLB Deployed" if convoy_plan.bridge_deployed else "No Bridge Needed"
+        logis_str = f"+{logis_el.arrival_time_min:.1f} min" if (logis_el and logis_el.path_result.status == PathStatus.OK) else "BLOCKED"
+        m_col5.metric("Logistics Truck ETA", logis_str, delta=bridge_badge)
+
     else:
-        m_col1.metric("Tactical Distance", "--")
-        m_col2.metric("Transit ETA", "--")
-        m_col3.metric("GO Traversal", "--")
-        m_col4.metric("SLOW-GO Traversal", "--")
-        m_col5.metric("Crossing Safety", "BLOCKED / NO PATH")
+        if metrics is not None:
+            m_col1.metric("Tactical Distance", f"{metrics.distance_km:.2f} km")
+            m_col2.metric("Transit ETA", f"{metrics.eta_minutes:.1f} min", f"{metrics.eta_hours:.2f} hrs")
+            m_col3.metric("GO Traversal", f"{metrics.pct_go:.1f}%")
+            m_col4.metric("SLOW-GO Traversal", f"{metrics.pct_slowgo:.1f}%")
+            cross_val = metrics.crossing_status.value
+            m_col5.metric("Crossing Safety", cross_val, delta=metrics.crossing_reason[:24] + "...")
+        else:
+            m_col1.metric("Tactical Distance", "--")
+            m_col2.metric("Transit ETA", "--")
+            m_col3.metric("GO Traversal", "--")
+            m_col4.metric("SLOW-GO Traversal", "--")
+            m_col5.metric("Crossing Safety", "BLOCKED / NO PATH")
 
     # Endpoint Validation Alerts
     if path_res.status == PathStatus.START_BLOCKED:
@@ -332,7 +417,7 @@ def run_app() -> None:
             f"🚫 No viable corridor exists between Origin [{start_col},{start_row}] and Target [{goal_col},{goal_row}]. "
             f"The hydrographic river channel or surrounding wetlands exceed the mobility envelope of {vehicle_preset_name} "
             f"under rainfall {rainfall_mult:.2f}x and current factor {current_factor:.2f}. "
-            "Actionable remedy: Select Heavy Tracked Tank, reduce seasonal rainfall multiplier, or relocate route endpoints."
+            "Actionable remedy: Switch to Convoy Mode with AVLB Combat Bridge, select Heavy Tracked Tank, or reduce rainfall."
         )
 
     # --- Interactive Folium Map ---
@@ -341,7 +426,8 @@ def run_app() -> None:
     folium_map = build_trafficability_folium_map(
         terrain=terrain,
         trafficability=trafficability,
-        path_result=path_res,
+        path_result=path_res if not is_convoy_mode else None,
+        convoy_plan=convoy_plan,
         start_cell=(start_row, start_col),
         goal_cell=(goal_row, goal_col),
         show_river_overlay=True,
@@ -383,13 +469,47 @@ def run_app() -> None:
                     st.rerun()
 
     # --- Analysis Tabs ---
-    tab_profile, tab_breakdown, tab_rasters, tab_table, tab_export = st.tabs([
-        "📈 Longitudinal Profile",
-        "📊 Mobility Breakdown",
-        "🛰️ Raw Sensor Layers",
-        "📋 Route Table",
-        "📦 Mission Export",
-    ])
+    if is_convoy_mode:
+        tab_convoy, tab_profile, tab_breakdown, tab_rasters, tab_table, tab_export = st.tabs([
+            "🎖️ Convoy Logistics Schedule",
+            "📈 Longitudinal Profile",
+            "📊 Mobility Breakdown",
+            "🛰️ Raw Sensor Layers",
+            "📋 Route Table",
+            "📦 Mission Export",
+        ])
+        with tab_convoy:
+            st.subheader("Tactical Echelon Convoy Movement Order & Bridging Logistics")
+            st.info(convoy_plan.message)
+
+            convoy_rows = []
+            for name, elem in convoy_plan.elements.items():
+                convoy_rows.append({
+                    "Echelon": name,
+                    "Vehicle Asset": elem.vehicle.name,
+                    "Role": elem.vehicle.role.value,
+                    "Departure Delay (min)": f"+{elem.departure_delay_min:.1f}",
+                    "Transit Duration (min)": f"{elem.transit_duration_min:.1f}",
+                    "Arrival Time (min)": f"+{elem.arrival_time_min:.1f}",
+                    "Waypoints Traversed": len(elem.path_result.path_cells),
+                    "Status": elem.path_result.status.value,
+                })
+            df_convoy = pd.DataFrame(convoy_rows)
+            st.dataframe(df_convoy, use_container_width=True)
+
+            if convoy_plan.bridge_cells:
+                st.success(
+                    f"🌉 Combat Engineering Asset deployed AVLB bridge across {len(convoy_plan.bridge_cells)} river cell(s). "
+                    "Logistics support trucks cleared for crossing!"
+                )
+    else:
+        tab_profile, tab_breakdown, tab_rasters, tab_table, tab_export = st.tabs([
+            "📈 Longitudinal Profile",
+            "📊 Mobility Breakdown",
+            "🛰️ Raw Sensor Layers",
+            "📋 Route Table",
+            "📦 Mission Export",
+        ])
 
     with tab_profile:
         if profile is not None and metrics is not None:

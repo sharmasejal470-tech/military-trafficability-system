@@ -61,6 +61,15 @@ VEHICLE_PRESETS: Dict[str, VehicleProfile] = {
         speed_kmph_go=35.0,
         speed_kmph_slowgo=12.0,
     ),
+    "Combat Engineering AVLB": VehicleProfile(
+        name="Combat Engineering AVLB",
+        weight_class="Heavy",
+        max_slope_deg=25.0,
+        max_fording_m=1.20,
+        min_firmness=0.70,
+        speed_kmph_go=30.0,
+        speed_kmph_slowgo=10.0,
+    ),
 }
 
 DEFAULT_VEHICLE_NAME = "Medium Tactical 6x6 Truck"

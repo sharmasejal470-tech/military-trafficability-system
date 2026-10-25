@@ -29,12 +29,16 @@ from core.config import (
     RGBA_RIVER,
     SOIL_LABELS,
     SoilType,
+    COLOR_CONVOY_RECON,
+    COLOR_CONVOY_SPEARHEAD,
+    COLOR_CONVOY_LOGISTICS,
+    COLOR_CONVOY_BRIDGE,
     get_grid_bounds,
     cell_to_latlon,
 )
 from core.terrain import TerrainGrid
 from core.trafficability import TrafficabilityResult
-from core.pathfinding import PathResult
+from core.pathfinding import PathResult, ConvoyPlan, ConvoyElementPlan
 from core.analytics import RouteMetrics, ProfileData, CrossingSafetyStatus
 
 
@@ -78,6 +82,7 @@ def build_trafficability_folium_map(
     terrain: TerrainGrid,
     trafficability: TrafficabilityResult,
     path_result: Optional[PathResult] = None,
+    convoy_plan: Optional[ConvoyPlan] = None,
     start_cell: Optional[Tuple[int, int]] = None,
     goal_cell: Optional[Tuple[int, int]] = None,
     show_river_overlay: bool = True,
@@ -85,7 +90,7 @@ def build_trafficability_folium_map(
 ) -> folium.Map:
     """
     Constructs a high-performance Leaflet Folium map with raster ImageOverlays,
-    tactical waypoints, and interactive layer controls.
+    tactical waypoints, multi-vehicle convoy trajectories, and interactive layer controls.
     """
     south, west, north, east = get_grid_bounds(
         base_lat=terrain.base_lat,
@@ -145,8 +150,50 @@ def build_trafficability_folium_map(
             interactive=False,
         ).add_to(m)
 
-    # 4. Route Polyline
-    if path_result is not None and path_result.path_cells:
+    # 4. Route Polyline(s)
+    if convoy_plan is not None:
+        # Multi-vehicle Convoy Rendering
+        for echelon_name, element in convoy_plan.elements.items():
+            if element.path_result.path_cells:
+                latlon_pts = []
+                for r, c in element.path_result.path_cells:
+                    coords = cell_to_latlon(
+                        int(r), int(c),
+                        terrain.base_lat, terrain.base_lon,
+                        terrain.rows, terrain.cols, terrain.cell_size_m
+                    )
+                    if coords is not None:
+                        latlon_pts.append(coords)
+                if len(latlon_pts) >= 2:
+                    tooltip_text = (
+                        f"Convoy {echelon_name}: {element.vehicle.name} "
+                        f"(ETA +{element.arrival_time_min:.1f}m)"
+                    )
+                    folium.PolyLine(
+                        locations=latlon_pts,
+                        color=element.color,
+                        weight=5 if echelon_name == "Spearhead" else 4,
+                        opacity=0.95,
+                        dash_array="5, 5" if echelon_name == "Recon" else None,
+                        tooltip=tooltip_text,
+                    ).add_to(m)
+
+        # Tactical Bridgehead Markers
+        if convoy_plan.bridge_cells:
+            for br, bc in convoy_plan.bridge_cells:
+                b_coords = cell_to_latlon(
+                    int(br), int(bc),
+                    terrain.base_lat, terrain.base_lon,
+                    terrain.rows, terrain.cols, terrain.cell_size_m
+                )
+                if b_coords is not None:
+                    folium.Marker(
+                        location=b_coords,
+                        tooltip="🎖️ AVLB Tactical Bridgehead (Deployed by Engineers)",
+                        icon=folium.Icon(color="darkblue", icon="wrench", prefix="fa"),
+                    ).add_to(m)
+
+    elif path_result is not None and path_result.path_cells:
         latlon_points = []
         for r, c in path_result.path_cells:
             coords = cell_to_latlon(
@@ -202,13 +249,43 @@ def build_trafficability_folium_map(
     folium.LayerControl(position="topright", collapsed=False).add_to(m)
 
     # 6. HTML Floating Legend
+    if convoy_plan is not None:
+        legend_routes = f"""
+        <div style="display: flex; align-items: center; margin-top: 6px; border-top: 1px solid #374151; padding-top: 5px;">
+            <span style="background-color: {COLOR_CONVOY_RECON}; width: 14px; height: 3px; display: inline-block; border-radius: 2px; margin-right: 6px;"></span>
+            <span style="font-size: 11px;">Recon Scout (Jeep)</span>
+        </div>
+        <div style="display: flex; align-items: center; margin-top: 4px;">
+            <span style="background-color: {COLOR_CONVOY_SPEARHEAD}; width: 14px; height: 4px; display: inline-block; border-radius: 2px; margin-right: 6px;"></span>
+            <span style="font-size: 11px;">Spearhead (Tank)</span>
+        </div>
+        <div style="display: flex; align-items: center; margin-top: 4px;">
+            <span style="background-color: {COLOR_CONVOY_LOGISTICS}; width: 14px; height: 3px; display: inline-block; border-radius: 2px; margin-right: 6px;"></span>
+            <span style="font-size: 11px;">Logistics (Truck)</span>
+        </div>
+        """
+        if convoy_plan.bridge_cells:
+            legend_routes += f"""
+            <div style="display: flex; align-items: center; margin-top: 4px;">
+                <span style="background-color: {COLOR_CONVOY_BRIDGE}; width: 10px; height: 10px; display: inline-block; border-radius: 50%; margin-right: 8px;"></span>
+                <span style="font-size: 11px;">AVLB Bridgehead</span>
+            </div>
+            """
+    else:
+        legend_routes = f"""
+        <div style="display: flex; align-items: center; margin-top: 6px; border-top: 1px solid #374151; padding-top: 5px;">
+            <span style="background-color: #00d2ff; width: 18px; height: 4px; display: inline-block; border-radius: 2px; margin-right: 6px;"></span>
+            <span style="font-weight: 600;">Tactical Route</span>
+        </div>
+        """
+
     legend_html = f"""
     <div style="
         position: fixed;
         bottom: 25px;
         right: 25px;
-        width: 195px;
-        background-color: rgba(18, 24, 38, 0.88);
+        width: 215px;
+        background-color: rgba(18, 24, 38, 0.90);
         border: 1px solid #374151;
         border-radius: 8px;
         padding: 10px 14px;
@@ -233,10 +310,7 @@ def build_trafficability_folium_map(
             <span style="background-color: {COLOR_NO_GO}; width: 14px; height: 14px; display: inline-block; border-radius: 3px; margin-right: 8px;"></span>
             <span>No-Go (Impassable)</span>
         </div>
-        <div style="display: flex; align-items: center; margin-top: 6px; border-top: 1px solid #374151; padding-top: 5px;">
-            <span style="background-color: #00d2ff; width: 18px; height: 4px; display: inline-block; border-radius: 2px; margin-right: 6px;"></span>
-            <span style="font-weight: 600;">Tactical Route</span>
-        </div>
+        {legend_routes}
     </div>
     """
     m.get_root().html.add_child(folium.Element(legend_html))
@@ -346,15 +420,16 @@ def build_breakdown_chart(
 
 
 def build_raw_sensor_heatmaps(terrain: TerrainGrid) -> go.Figure:
-    """Builds a 5-panel subplot showing raw DEM, slope, soil, moisture, and water depth."""
+    """Builds a 6-panel subplot showing raw DEM, slope, soil, moisture, water depth, and 2D hydrodynamic flow velocity."""
     fig = make_subplots(
-        rows=1, cols=5,
+        rows=1, cols=6,
         subplot_titles=[
             "Elevation (m)",
             "Slope (deg)",
             "Soil Category",
             "Moisture [0-1]",
             "Water Depth (m)",
+            "Flow Speed (m/s)",
         ],
     )
 
@@ -383,15 +458,20 @@ def build_raw_sensor_heatmaps(terrain: TerrainGrid) -> go.Figure:
         go.Heatmap(z=terrain.water_depth, colorscale="YlGnBu", showscale=False),
         row=1, col=5
     )
+    # 6. Hydrodynamic Flow Speed
+    fig.add_trace(
+        go.Heatmap(z=terrain.river_velocity, colorscale="Tealgrn", showscale=False),
+        row=1, col=6
+    )
 
     fig.update_layout(
-        title="Raw GIS & Hydrographic Sensor Rasters (100x100 Grid Cells)",
+        title="Raw GIS, Hydrographic & Hydrodynamic Flow Rasters (100x100 Grid Cells)",
         template="plotly_dark",
         height=280,
         margin=dict(l=20, r=20, t=50, b=20),
     )
     # Invert y axis so row 0 is top
-    for i in range(1, 6):
+    for i in range(1, 7):
         fig.update_yaxes(autorange="reversed", row=1, col=i)
     return fig
 

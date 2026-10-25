@@ -55,6 +55,12 @@ RGBA_NO_GO = (231, 76, 60, 190)
 RGBA_TRANSPARENT = (0, 0, 0, 0)
 RGBA_RIVER = (52, 152, 219, 140)
 
+# Convoy Echelon Colors
+COLOR_CONVOY_RECON = "#00d2ff"       # Light Recon (Cyan)
+COLOR_CONVOY_SPEARHEAD = "#e67e22"    # Heavy Armored Spearhead (Orange)
+COLOR_CONVOY_LOGISTICS = "#9b59b6"    # Tactical Logistics Column (Purple)
+COLOR_CONVOY_BRIDGE = "#f39c12"       # Combat Bridgehead (Amber Gold)
+
 
 # --- Mobility Reason Codes (Bitmask) ---
 class MobilityReason(IntFlag):

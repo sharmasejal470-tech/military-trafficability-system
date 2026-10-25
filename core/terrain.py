@@ -1,7 +1,7 @@
 """Terrain and hydrographic environment synthesis module.
 
 Fuses synthetic digital elevation models (DEM), slope analysis, soil categorization,
-surface moisture fields, and AUV sonar riverbed bathymetry into a georeferenced grid.
+surface moisture fields, AUV sonar bathymetry, and 2D hydrodynamic river flow velocities.
 """
 
 from __future__ import annotations
@@ -29,13 +29,16 @@ class TerrainGrid:
     Immutable representation of the 2D environmental and hydrographic grid.
     Grid indexing convention: [row, col] where row 0 = North, col 0 = West.
     """
-    elevation: np.ndarray        # meters above sea level [rows, cols]
-    slope: np.ndarray            # slope in degrees [rows, cols]
-    soil_type: np.ndarray        # SoilType int code [rows, cols]
-    moisture: np.ndarray         # normalized moisture [0.0, 1.0] [rows, cols]
-    river_mask: np.ndarray       # boolean mask of river channel [rows, cols]
-    water_depth: np.ndarray      # water depth in meters [rows, cols]
-    riverbed_firmness: np.ndarray # AUV measured firmness [0.0, 1.0] (NaN outside river)
+    elevation: np.ndarray          # meters above sea level [rows, cols]
+    slope: np.ndarray              # slope in degrees [rows, cols]
+    soil_type: np.ndarray          # SoilType int code [rows, cols]
+    moisture: np.ndarray           # normalized moisture [0.0, 1.0] [rows, cols]
+    river_mask: np.ndarray         # boolean mask of river channel [rows, cols]
+    water_depth: np.ndarray        # water depth in meters [rows, cols]
+    riverbed_firmness: np.ndarray   # AUV measured firmness [0.0, 1.0] (NaN outside river)
+    river_velocity: np.ndarray     # 2D hydrodynamic current speed (m/s) [rows, cols]
+    flow_vector_u: np.ndarray      # East-West flow velocity component [rows, cols]
+    flow_vector_v: np.ndarray      # North-South flow velocity component [rows, cols]
     rows: int
     cols: int
     cell_size_m: float
@@ -77,6 +80,7 @@ class TerrainGrid:
             "moisture": self.moisture.ravel(),
             "water_depth": self.water_depth.ravel(),
             "riverbed_firmness": self.riverbed_firmness.ravel(),
+            "river_velocity": self.river_velocity.ravel(),
         })
 
 
@@ -101,7 +105,7 @@ def generate_terrain(
 ) -> TerrainGrid:
     """
     Generates a deterministic synthetic terrain grid combining satellite DEM features,
-    surface moisture, soil classifications, and AUV river bathymetry.
+    surface moisture, soil classifications, AUV river bathymetry, and 2D hydrodynamic currents.
     """
     rng = np.random.default_rng(seed)
 
@@ -152,10 +156,6 @@ def generate_terrain(
 
     sonar_noise = rng.uniform(-0.05, 0.05, size=(rows, cols))
 
-    # Geomorphological river reaches:
-    # A) Natural shallow ford (rows 46 to 52): 0.35m - 0.48m water depth, firmness 0.85 - 0.95 (compact gravel)
-    # B) Rocky / gravel reach (rows 20 to 30): 0.85m - 1.20m water depth, firmness 0.78 - 0.90 (tank-fordable, jeep-blocked)
-    # C) Deep thalweg reach (all other rows): up to 3.5m depth, silt/muck firmness 0.20 - 0.65
     is_ford_section = (row_indices >= 46) & (row_indices <= 52)
     is_gravel_reach = (row_indices >= 20) & (row_indices <= 30)
 
@@ -171,13 +171,11 @@ def generate_terrain(
             firmness_vals = 0.86 + 0.08 * (1.0 - d_norm) + rng.uniform(-0.02, 0.02, size=len(depth_vals))
             firmness_vals = np.clip(firmness_vals, 0.80, 0.98)
         elif is_gravel_reach[r]:
-            # Rocky reach: depth 0.85m to 1.15m (exceeds Jeep 0.6m, fits Tank 1.4m), firm gravel (0.78 - 0.90)
             depth_vals = 0.85 + 0.30 * (1.0 - d_norm) + sonar_noise[r, c_mask]
             depth_vals = np.clip(depth_vals, 0.80, 1.20)
             firmness_vals = 0.82 + 0.06 * (1.0 - d_norm) + rng.uniform(-0.02, 0.02, size=len(depth_vals))
             firmness_vals = np.clip(firmness_vals, 0.77, 0.92)
         else:
-            # Deep alluvial section: up to 3.5m at thalweg, softer silt/muck in deep cuts
             depth_vals = 0.6 + 2.8 * (1.0 - d_norm) + sonar_noise[r, c_mask]
             depth_vals = np.clip(depth_vals, 0.20, 3.50)
             firmness_vals = 0.65 - 0.35 * (1.0 - d_norm) + rng.uniform(-0.05, 0.05, size=len(depth_vals))
@@ -186,7 +184,36 @@ def generate_terrain(
         water_depth[r, c_mask] = depth_vals
         riverbed_firmness[r, c_mask] = firmness_vals
 
-    # 4. Spatially Coherent Soil Classification
+    # 4. 2D Hydrodynamic River Velocity & Flow Vectors
+    # Based on open-channel hydraulics: velocity scales with water depth^(2/3) and meander curvature
+    river_velocity = np.zeros((rows, cols), dtype=float)
+    flow_u = np.zeros((rows, cols), dtype=float)
+    flow_v = np.zeros((rows, cols), dtype=float)
+
+    # Tangent vector along centerline (downstream North to South)
+    dc_dr = np.gradient(center_cols)
+    tangent_mag = np.hypot(dc_dr, 1.0)
+    unit_u = dc_dr / tangent_mag
+    unit_v = 1.0 / tangent_mag
+
+    for r in range(rows):
+        if not np.any(river_mask[r]):
+            continue
+        c_mask = river_mask[r]
+        d_center = 1.0 - norm_dist_to_center[r, c_mask]
+        depth_ratio = water_depth[r, c_mask] / 3.5
+
+        # Parabolic cross-channel velocity + depth scaling (Manning-inspired)
+        # Shallow banks: ~0.3 m/s, Deep center: up to 2.4 m/s
+        local_speed = (0.3 + 2.1 * (depth_ratio ** 0.67) * (d_center ** 0.5))
+        if is_ford_section[r]:
+            local_speed *= 0.45  # Shallow wide sandbar decelerates flow
+
+        river_velocity[r, c_mask] = local_speed
+        flow_u[r, c_mask] = local_speed * unit_u[r]
+        flow_v[r, c_mask] = local_speed * unit_v[r]
+
+    # 5. Spatially Coherent Soil Classification
     dist_from_river = distance_transform_edt(~river_mask)
 
     norm_elev = (elevation - np.min(elevation)) / (np.max(elevation) - np.min(elevation) + 1e-6)
@@ -198,7 +225,6 @@ def generate_terrain(
 
     soil_type = np.full((rows, cols), SoilType.SANDY_LOAM, dtype=int)
 
-    # Tactical crossing approach ramps: stable banks at designated crossings (rows 20-30 and 45-53)
     is_approach_ramp = np.zeros((rows, cols), dtype=bool)
     is_approach_ramp[(row_indices >= 20) & (row_indices <= 30), :] = True
     is_approach_ramp[(row_indices >= 45) & (row_indices <= 53), :] = True
@@ -212,7 +238,7 @@ def generate_terrain(
     hard_mask = (~marsh_mask) & (~river_mask) & (soil_potential >= 0.68)
     soil_type[hard_mask] = SoilType.HARD_GROUND
 
-    # 5. Moisture field [0.0, 1.0]
+    # 6. Moisture field [0.0, 1.0]
     proximity_factor = np.exp(-dist_from_river / 12.0)
     elevation_inversion = 1.0 - norm_elev
     soil_moisture_bias = np.zeros((rows, cols), dtype=float)
@@ -234,6 +260,9 @@ def generate_terrain(
         river_mask=river_mask,
         water_depth=water_depth,
         riverbed_firmness=riverbed_firmness,
+        river_velocity=river_velocity,
+        flow_vector_u=flow_u,
+        flow_vector_v=flow_v,
         rows=rows,
         cols=cols,
         cell_size_m=cell_size_m,
