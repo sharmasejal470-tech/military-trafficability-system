@@ -82,20 +82,31 @@ def compute_trafficability(
     reasons = np.zeros((rows, cols), dtype=int)
 
     is_heavy = bool(vehicle.weight_class.lower() == "heavy")
+    is_medium = bool(vehicle.weight_class.lower() == "medium")
 
     # 3. Vectorized NO-GO (RED) Evaluation
     red_slope = terrain.slope > vehicle.max_slope_deg
     red_water = effective_water_depth > effective_fording_field
     red_firmness = terrain.river_mask & (effective_firmness < vehicle.min_firmness)
 
+    # Precipitation runoff and soil liquefaction (Monsoon mud hazards)
+    excess_rain = max(0.0, rainfall - 1.0)
+    eff_moisture = np.clip(terrain.moisture + 0.35 * excess_rain, 0.0, 1.0)
+
     if is_heavy:
         red_marsh = terrain.soil_type == SoilType.MARSH_WETLAND
         yellow_marsh = np.zeros((rows, cols), dtype=bool)
+        red_mud = (terrain.soil_type == SoilType.SOFT_CLAY) & (excess_rain > 0.15) & (eff_moisture >= 0.85)
+    elif is_medium:
+        red_marsh = (terrain.soil_type == SoilType.MARSH_WETLAND) & (excess_rain > 0.25) & (eff_moisture >= 0.88)
+        yellow_marsh = (terrain.soil_type == SoilType.MARSH_WETLAND) & (~red_marsh)
+        red_mud = (terrain.soil_type == SoilType.SOFT_CLAY) & (excess_rain > 0.35) & (eff_moisture >= 0.92)
     else:
-        red_marsh = np.zeros((rows, cols), dtype=bool)
-        yellow_marsh = terrain.soil_type == SoilType.MARSH_WETLAND
+        red_marsh = (terrain.soil_type == SoilType.MARSH_WETLAND) & (excess_rain > 0.25) & (eff_moisture >= 0.88)
+        yellow_marsh = (terrain.soil_type == SoilType.MARSH_WETLAND) & (~red_marsh)
+        red_mud = (terrain.soil_type == SoilType.SOFT_CLAY) & (excess_rain > 0.40) & (eff_moisture >= 0.93)
 
-    red_mask = red_slope | red_water | red_firmness | red_marsh
+    red_mask = red_slope | red_water | red_firmness | red_marsh | red_mud
 
     # 4. Vectorized SLOW-GO (YELLOW) Evaluation
     yellow_slope_thresh = SLOW_GO_SLOPE_THRESHOLD_RATIO * vehicle.max_slope_deg
@@ -123,6 +134,7 @@ def compute_trafficability(
     reasons[red_water] |= MobilityReason.NO_GO_WATER_DEPTH
     reasons[red_firmness] |= MobilityReason.NO_GO_FIRMNESS
     reasons[red_marsh] |= MobilityReason.NO_GO_HEAVY_ON_MARSH
+    reasons[red_mud] |= MobilityReason.NO_GO_FIRMNESS
 
     reasons[yellow_slope & ~red_mask] |= MobilityReason.SLOW_GO_SLOPE
     reasons[yellow_water & ~red_mask] |= MobilityReason.SLOW_GO_WATER_DEPTH
