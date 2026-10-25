@@ -5,6 +5,14 @@ bathymetry fusion, NATO terramechanics classification, and tactical A* pathfindi
 """
 
 from __future__ import annotations
+import os
+import sys
+
+# Ensure application root directory is always on Python import path
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+if BASE_DIR not in sys.path:
+    sys.path.insert(0, BASE_DIR)
+
 import io
 import json
 import logging
